@@ -1,0 +1,231 @@
+/* ═══════════════════════════════════════════════════════════
+   GLOBAL STYLES — base reset + utility classes used across screens
+   ═══════════════════════════════════════════════════════════ */
+
+@import "./tokens.css";
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  background: #0f172a;
+}
+
+body {
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  font-family: var(--font-sans);
+  color: var(--text-1);
+}
+
+body::-webkit-scrollbar { display: none; }
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+
+input[type="number"] { width: 60px; }
+select { -webkit-appearance: none; }
+
+/* ─── Layout shell ─────────────────────────────────────── */
+.app-shell {
+  max-width: var(--max-content);
+  margin: 0 auto;
+  padding: 14px 10px 80px;
+  min-height: 100vh;
+  background: var(--surface-bg);
+}
+
+/* ─── Card ─────────────────────────────────────────────── */
+.card {
+  background: var(--surface-1);
+  backdrop-filter: var(--blur-lg);
+  -webkit-backdrop-filter: var(--blur-lg);
+  border-radius: var(--r-xl);
+  border: 1px solid var(--border-1);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm), var(--inset-hi);
+  transition: border-color 0.3s, box-shadow 0.3s, transform 0.15s;
+}
+
+/* ─── Modal ────────────────────────────────────────────── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay);
+  backdrop-filter: var(--blur-sm);
+  -webkit-backdrop-filter: var(--blur-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+  padding: 14px;
+}
+.modal {
+  background: var(--surface-3);
+  backdrop-filter: var(--blur-xl);
+  -webkit-backdrop-filter: var(--blur-xl);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-2xl);
+  padding: 18px;
+  width: 100%;
+  max-width: 340px;
+  box-shadow: var(--shadow-lg), var(--inset-hi);
+}
+
+/* ─── Buttons ─────────────────────────────────────────── */
+.btn-primary {
+  padding: 7px 14px;
+  border: none;
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+  backdrop-filter: var(--blur-sm);
+  -webkit-backdrop-filter: var(--blur-sm);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s;
+  box-shadow: 0 2px 10px var(--accent-glow);
+}
+.btn-primary:disabled,
+.btn-primary.off {
+  background: var(--surface-2);
+  color: var(--text-3);
+  cursor: default;
+  box-shadow: none;
+}
+
+.btn-ghost {
+  padding: 5px 10px;
+  border: 1px solid var(--border-1);
+  border-radius: 7px;
+  background: var(--surface-2);
+  backdrop-filter: var(--blur-sm);
+  -webkit-backdrop-filter: var(--blur-sm);
+  color: var(--text-2);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* ─── Tab bar ─────────────────────────────────────────── */
+.tab-bar {
+  display: flex;
+  gap: 3px;
+  margin-bottom: 10px;
+  background: var(--surface-1);
+  backdrop-filter: var(--blur-md);
+  -webkit-backdrop-filter: var(--blur-md);
+  border-radius: var(--r-lg);
+  padding: 3px;
+  border: 1px solid var(--border-1);
+  box-shadow: var(--shadow-sm);
+}
+.tab-btn {
+  flex: 1;
+  padding: 7px 0;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.tab-btn.active {
+  background: var(--surface-4);
+  backdrop-filter: var(--blur-sm);
+  -webkit-backdrop-filter: var(--blur-sm);
+  color: var(--text-1);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+}
+
+/* ─── Checkbox ────────────────────────────────────────── */
+.chk {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-sm);
+  border: 2px solid var(--border-3);
+  background: var(--surface-0);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: all 0.15s;
+}
+.chk.on {
+  border-color: var(--good);
+  background: var(--good-bg);
+  color: #052e16;
+  box-shadow: 0 0 8px var(--good-glow);
+}
+
+/* ─── Toast ───────────────────────────────────────────── */
+.toast {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(34, 197, 94, 0.9);
+  backdrop-filter: var(--blur-md);
+  -webkit-backdrop-filter: var(--blur-md);
+  color: #052e16;
+  padding: 6px 18px;
+  border-radius: var(--r-pill);
+  font-weight: 600;
+  font-size: 12px;
+  z-index: 1000;
+  box-shadow: var(--shadow-md);
+}
+
+/* ─── Label + input helpers ───────────────────────────── */
+.lbl {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--text-muted);
+  display: block;
+  margin-bottom: 3px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+}
+.field {
+  padding: 6px 7px;
+  border: 1px solid var(--border-2);
+  border-radius: 7px;
+  font-size: 11px;
+  font-family: var(--font-sans);
+  margin-bottom: 4px;
+  color: var(--text-1);
+  background: var(--surface-0);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  box-sizing: border-box;
+  width: 100%;
+}
+
+/* ─── Loading splash (used before hydration) ──────────── */
+.splash {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 50vh;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}

@@ -1,0 +1,14 @@
+{
+  "projects": {
+    "default": "eating-plan-a8952"
+  },
+  "targets": {
+    "eating-plan-a8952": {
+      "hosting": {
+        "preview": [
+          "slimroute-v2"
+        ]
+      }
+    }
+  }
+}
