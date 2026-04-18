@@ -64,3 +64,20 @@ export function seedDay(dayTypeId) {
 export function isSeeded(dayRecord) {
   return !!(dayRecord && dayRecord.meals);
 }
+
+// ─────────────────────────────────────────────────────────
+// Helper: read a day-record straight from localStorage.
+// Returns null if the day hasn't been opened yet. Used by
+// Home to compute real ring totals without duplicating
+// the "ept:" namespace knowledge everywhere.
+// ─────────────────────────────────────────────────────────
+export function readDayRecord(dateKey) {
+  try {
+    const raw = localStorage.getItem("ept:meals:" + dateKey);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return isSeeded(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}

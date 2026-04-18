@@ -79,7 +79,7 @@ export const T_TPL = [
   {id:"fruit",name:"Fruit — Mixed Fruit",time:"5:30 PM",fixed:false,items:[{ingId:"apple",amt:1},{ingId:"banana",amt:80,locked:true},{ingId:"raspberries",amt:60},{ingId:"blueberries",amt:20}]},
   {id:"pregym2",name:"Pre-Gym 2 — Bread & Jam",time:"6:00 PM",fixed:false,items:[{ingId:"sourdough",amt:85},{ingId:"butter",amt:10},{ingId:"jam",amt:20}]},
   {id:"postgym1",name:"Post-Gym 1 — Eggs on Toast",time:"8:15 PM",fixed:false,items:[{ingId:"sourdough",amt:85},{ingId:"butter",amt:10},{ingId:"whole-egg",amt:3},{ingId:"egg-white",amt:2}]},
-  {id:"postgym2",name:"Post-Gym 2 — Protein & Choc",time:"9:30 PM",fixed:false,items:[{ingId:"hp-yogurt",amt:130},{ingId:"whey",amt:40},{ingId:"dark-choc",amt:15},{ingId:"omega3-dna",amt:2,locked:true}]},
+  {id:"postgym2",name:"Post-Gym 2 — Protein & Choc",time:"9:30 PM",fixed:false,items:[{ingId:"hp-yogurt",amt:130},{ingId:"whey",amt:40},{ingId:"dark-choc",amt:15}]},
 ];
 
 // Rest-day meal template

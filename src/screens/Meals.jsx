@@ -1,21 +1,19 @@
 // ═══════════════════════════════════════════════════════════
 // Meals — the meal list for the selected day.
-//
-// Each day has its own independent copy of the meals, seeded
-// from the day-type template on first visit. Edits stay in
-// that day only. (Onboarding + full edit UI come in later phases.)
-//
-// Phase 1: static list rendering. Checkboxes visible but inert;
-// add-item / copy-day show placeholder alerts.
+// Phase 2 + 3: checkbox ticks, +/- amount editing, lock toggle,
+// auto-rebalance button. Each day is an independent copy.
 // ═══════════════════════════════════════════════════════════
 
-import React, { useMemo, useEffect } from "react";
+import React, { useMemo, useEffect, useState } from "react";
 import WeekStrip from "../components/WeekStrip.jsx";
 import MealCard from "../components/MealCard.jsx";
 import Card from "../components/Card.jsx";
+import AddItemFlow, { addIngredientToMeal } from "../components/AddItemFlow.jsx";
 import { useLocalState } from "../hooks/useLocalState.js";
 import { DAYS } from "../lib/constants.js";
 import { wkD, lds, getDayMode } from "../lib/date.js";
+import { buildIngMap, sa } from "../lib/macros.js";
+import { autoRebalance } from "../lib/meals.js";
 import {
   DAY_TYPES,
   defaultDayTypeForWeekday,
@@ -23,6 +21,12 @@ import {
   isSeeded,
   getDayType,
 } from "../lib/meal-store.js";
+
+const IM = buildIngMap();
+
+// Mock profile values until Profile screen is wired
+const BODY_WEIGHT_KG = 83;
+const BASE_CAL_TARGET = 2533; // matches mock on Home for visual consistency
 
 export default function Meals({ weekNav }) {
   const { weekKey, selectedDayIdx, onSelectDay, onShiftWeek, onJumpToToday } = weekNav;
@@ -38,64 +42,211 @@ export default function Meals({ weekNav }) {
     month: "short",
   });
 
-  // Day record — { dayType, meals } — persisted and synced.
-  // null when the day has never been opened before.
+  // Day record — { dayType, meals, doneIds } — persisted and synced
   const [dayRecord, setDayRecord] = useLocalState(`meals:${selectedKey}`, null);
 
-  // On first visit, seed a fresh independent copy from the template.
+  // Local toast for post-rebalance feedback
+  const [toast, setToast] = useState(null);
+  // Add-item overlay open/closed
+  const [addItemOpen, setAddItemOpen] = useState(false);
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 2500);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  // Seed on first visit
   useEffect(() => {
     if (isSeeded(dayRecord)) return;
     const defaultType = defaultDayTypeForWeekday(selectedDayIdx);
     setDayRecord({
       dayType: defaultType,
       meals: seedDay(defaultType),
+      doneIds: [],
     });
   }, [dayRecord, selectedDayIdx, setDayRecord]);
 
-  // While seeding, dayRecord is briefly null — render a small skeleton
   if (!isSeeded(dayRecord)) {
     return (
       <div>
-        <WeekStripShell weekNav={weekNav} />
+        <WeekStrip
+          weekKey={weekKey}
+          selectedDayIdx={selectedDayIdx}
+          completedDayIdxs={[]}
+          onSelectDay={onSelectDay}
+          onShiftWeek={onShiftWeek}
+          onJumpToToday={onJumpToToday}
+        />
         <SkeletonBlock />
       </div>
     );
   }
 
+  const meals = dayRecord.meals;
+  const doneIds = dayRecord.doneIds ?? [];
   const currentDayType = getDayType(dayRecord.dayType);
+  const calTarget = Math.round(BASE_CAL_TARGET * currentDayType.calMultiplier);
+  const totals = sa(meals, IM);
 
+  // ─── Handlers ───────────────────────────────────────────
   const changeDayType = (newTypeId) => {
     if (newTypeId === dayRecord.dayType) return;
-    // Changing day type re-seeds with the new template — Phase 1
-    // keeps this simple; Phase 3 will offer a confirm dialog if
-    // the user has already logged meals.
+    if (
+      doneIds.length > 0 &&
+      !window.confirm(
+        `Switching to ${getDayType(newTypeId).label} will reset ${dayName}'s meals. Continue?`
+      )
+    ) {
+      return;
+    }
     setDayRecord({
       dayType: newTypeId,
       meals: seedDay(newTypeId),
+      doneIds: [],
     });
+  };
+
+  const toggleDone = (mealId) => {
+    setDayRecord({
+      ...dayRecord,
+      doneIds: doneIds.includes(mealId)
+        ? doneIds.filter((id) => id !== mealId)
+        : [...doneIds, mealId],
+    });
+  };
+
+  const updateAmount = (mealId, itemIdx, newAmt) => {
+    setDayRecord({
+      ...dayRecord,
+      meals: meals.map((m) => {
+        if (m.id !== mealId) return m;
+        return {
+          ...m,
+          items: m.items.map((it, i) => (i === itemIdx ? { ...it, amt: newAmt } : it)),
+        };
+      }),
+    });
+  };
+
+  const toggleLock = (mealId, itemIdx) => {
+    setDayRecord({
+      ...dayRecord,
+      meals: meals.map((m) => {
+        if (m.id !== mealId) return m;
+        return {
+          ...m,
+          items: m.items.map((it, i) =>
+            i === itemIdx ? { ...it, locked: !it.locked } : it
+          ),
+        };
+      }),
+    });
+  };
+
+  const deleteItem = (mealId, itemIdx) => {
+    setDayRecord({
+      ...dayRecord,
+      meals: meals
+        .map((m) => {
+          if (m.id !== mealId) return m;
+          return {
+            ...m,
+            items: m.items.filter((_, i) => i !== itemIdx),
+          };
+        })
+        // Cascade: drop any meal that ends up empty AND wasn't user-named
+        // (empty user-named meals stay, so the user can re-fill them)
+        .filter((m) => m.items.length > 0 || m.userNamed),
+    });
+    // Also clean up doneIds — if the meal was removed, drop its id
+    const stillExisting = new Set(meals.map((m) => m.id));
+    const nextDoneIds = doneIds.filter((id) => stillExisting.has(id));
+    if (nextDoneIds.length !== doneIds.length) {
+      setDayRecord((r) => ({ ...r, doneIds: nextDoneIds }));
+    }
+  };
+
+  const deleteMeal = (mealId) => {
+    setDayRecord({
+      ...dayRecord,
+      meals: meals.filter((m) => m.id !== mealId),
+      doneIds: doneIds.filter((id) => id !== mealId),
+    });
+  };
+
+  const renameMeal = (mealId, newName) => {
+    setDayRecord({
+      ...dayRecord,
+      meals: meals.map((m) => {
+        if (m.id !== mealId) return m;
+        // Meal name format is "Section — Name" (a string). Rebuild it:
+        const section = m.name.includes(" — ")
+          ? m.name.slice(0, m.name.indexOf(" — "))
+          : m.name;
+        if (newName === null || newName === "") {
+          // Clear user-set name → revert to auto
+          return { ...m, name: section, userNamed: false };
+        }
+        return { ...m, name: `${section} — ${newName}`, userNamed: true };
+      }),
+    });
+  };
+
+  const runRebalance = () => {
+    const before = sa(meals, IM).cals;
+    // Preserve any user-chosen macro preference — balanced by default
+    const rebalanced = autoRebalance(meals, calTarget, IM, doneIds, "balanced", BODY_WEIGHT_KG);
+    const after = sa(rebalanced, IM).cals;
+    setDayRecord({ ...dayRecord, meals: rebalanced });
+    setToast(`Auto-rebalanced · ${before} → ${after} kcal (target ${calTarget})`);
   };
 
   const copyDay = () => {
     alert(`(Placeholder) Would copy ${dayName}'s meals to another day.`);
   };
 
-  const addItem = () => alert("(Placeholder) 'Add to which meal?' picker comes next phase.");
-  const scanItem = () => alert("(Placeholder) Barcode scanner comes in Phase 4.");
-  const savedTemplate = () => alert("(Placeholder) Saved meal templates come next phase.");
-  const createNewMeal = () => alert("(Placeholder) Meal builder comes next phase.");
-  const addSection = () => alert("(Placeholder) New meal section card comes next phase.");
+  const addItem = () => {
+    if (meals.length === 0) {
+      alert("No meal sections yet. Add a section first.");
+      return;
+    }
+    setAddItemOpen(true);
+  };
 
-  // For past days, show the list as read-only; for future days, show
-  // the list too (user is planning ahead), but no add/copy buttons.
+  const handleAddIngredient = (mealId, ingId) => {
+    setDayRecord({
+      ...dayRecord,
+      meals: addIngredientToMeal(meals, mealId, ingId),
+    });
+    setToast(`Added to meal`);
+  };
+
+  const scanItem = () =>
+    alert("(Placeholder) Barcode scanner comes in Phase 4.");
+  const savedTemplate = () =>
+    alert("(Placeholder) Saved meal templates come in Phase 4.");
+  const createNewMeal = () =>
+    alert("(Placeholder) Meal builder comes in Phase 4.");
+  const addSection = () =>
+    alert("(Placeholder) New meal section card comes in Phase 4.");
+
   const isPast = dayMode === "past";
   const isFuture = dayMode === "future";
+  const isReadOnly = isPast || isFuture;
+
+  const completeCount = doneIds.length;
+  const totalCount = meals.length;
+  const allComplete = totalCount > 0 && completeCount === totalCount;
+
+  // Work out which meal is "next up" (first un-done, chronological)
+  const nextMealId = meals.find((m) => !doneIds.includes(m.id))?.id;
 
   return (
     <div>
       <WeekStrip
         weekKey={weekKey}
         selectedDayIdx={selectedDayIdx}
-        completedDayIdxs={[]}
+        completedDayIdxs={allComplete ? [selectedDayIdx] : []}
         onSelectDay={onSelectDay}
         onShiftWeek={onShiftWeek}
         onJumpToToday={onJumpToToday}
@@ -137,7 +288,7 @@ export default function Meals({ weekNav }) {
             {dateStr}
           </div>
         </div>
-        {!isPast && !isFuture && (
+        {!isReadOnly && (
           <button onClick={copyDay} style={copyBtnStyle}>
             <CopyIcon />
             Copy day
@@ -145,93 +296,194 @@ export default function Meals({ weekNav }) {
         )}
       </div>
 
-      {/* Day-type toggle — temporary placeholder until onboarding */}
+      {/* Day-type toggle + day totals row */}
       <div
         style={{
           display: "flex",
-          gap: 6,
-          marginBottom: 14,
+          justifyContent: "space-between",
           alignItems: "center",
+          gap: 10,
+          marginBottom: 14,
+          flexWrap: "wrap",
         }}
       >
-        <span
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <span style={sectionLabelStyle}>Day type</span>
+          {DAY_TYPES.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => !isReadOnly && changeDayType(t.id)}
+              disabled={isReadOnly}
+              style={{
+                ...dayTypePillStyle,
+                ...(dayRecord.dayType === t.id ? dayTypePillActiveStyle : null),
+                opacity: isReadOnly ? 0.5 : 1,
+                cursor: isReadOnly ? "default" : "pointer",
+              }}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <div
           style={{
-            fontSize: 10,
+            fontSize: 11,
             color: "var(--text-3)",
             fontWeight: 700,
-            letterSpacing: 1,
-            textTransform: "uppercase",
-            marginRight: 4,
+            letterSpacing: 0.8,
           }}
         >
-          Day type
-        </span>
-        {DAY_TYPES.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => !isPast && changeDayType(t.id)}
-            disabled={isPast}
+          <span style={{ color: "var(--text-1)", fontWeight: 700 }}>
+            {totals.cals}
+          </span>
+          <span style={{ color: "var(--text-3)", margin: "0 4px" }}>/</span>
+          <span style={{ color: "var(--text-2)" }}>{calTarget} kcal</span>
+        </div>
+      </div>
+
+      {/* Auto-rebalance row */}
+      {!isReadOnly && (
+        <div style={{ marginBottom: 14 }}>
+          <button onClick={runRebalance} style={rebalanceBtnStyle}>
+            <RefreshIcon /> Auto-rebalance to {calTarget} kcal
+          </button>
+          <div
             style={{
-              ...dayTypePillStyle,
-              ...(dayRecord.dayType === t.id ? dayTypePillActiveStyle : null),
-              opacity: isPast ? 0.5 : 1,
-              cursor: isPast ? "default" : "pointer",
+              fontSize: 10,
+              color: "var(--text-3)",
+              marginTop: 4,
+              lineHeight: 1.4,
             }}
           >
-            {t.label}
-          </button>
-        ))}
-      </div>
+            Redistributes unlocked ingredients toward today's target. Locked
+            items and already-eaten meals won't change.
+          </div>
+        </div>
+      )}
 
       {/* Meal cards */}
       <div>
-        {dayRecord.meals.map((m) => (
-          <MealCard key={m.id} meal={m} state="idle" />
-        ))}
+        {meals.map((m) => {
+          const isDone = doneIds.includes(m.id);
+          const isActive = !isDone && m.id === nextMealId;
+          return (
+            <MealCard
+              key={m.id}
+              meal={m}
+              state={isDone ? "done" : isActive ? "active" : "idle"}
+              readOnly={isReadOnly}
+              onToggleDone={() => toggleDone(m.id)}
+              onUpdateAmount={(itemIdx, newAmt) =>
+                updateAmount(m.id, itemIdx, newAmt)
+              }
+              onToggleLock={(itemIdx) => toggleLock(m.id, itemIdx)}
+              onDeleteItem={(itemIdx) => deleteItem(m.id, itemIdx)}
+              onRenameMeal={(newName) => renameMeal(m.id, newName)}
+              onDeleteMeal={() => deleteMeal(m.id)}
+            />
+          );
+        })}
       </div>
 
-      {/* Phase-1 action panel — placeholders for next phase */}
-      {!isPast && !isFuture && (
-        <Card style={{ padding: 8, marginTop: 8 }}>
+      {/* Completion progress */}
+      {!isReadOnly && (
+        <div
+          style={{
+            padding: "10px 14px",
+            background: allComplete
+              ? "rgba(34,197,94,0.12)"
+              : "rgba(30,41,59,0.35)",
+            border: `1px solid ${
+              allComplete
+                ? "rgba(34,197,94,0.35)"
+                : "rgba(148,163,184,0.08)"
+            }`,
+            borderRadius: 10,
+            marginTop: 4,
+            marginBottom: 16,
+            textAlign: "center",
+            fontSize: 12,
+            fontWeight: 700,
+            color: allComplete ? "#4ade80" : "var(--text-2)",
+            letterSpacing: 0.4,
+          }}
+        >
+          {allComplete
+            ? `✓ All ${totalCount} meals complete · Day finished`
+            : `${completeCount} / ${totalCount} meals complete`}
+        </div>
+      )}
+
+      {/* Action panel */}
+      {!isReadOnly && (
+        <Card style={{ padding: 8, marginTop: 4 }}>
           <ActionButton icon="➕" label="Add item" onClick={addItem} />
           <ActionButton icon="📷" label="Scan item" onClick={scanItem} />
-          <ActionButton icon="📋" label="Saved meal template" onClick={savedTemplate} />
+          <ActionButton
+            icon="📋"
+            label="Saved meal template"
+            onClick={savedTemplate}
+          />
           <ActionButton icon="✏️" label="Create new meal" onClick={createNewMeal} />
         </Card>
       )}
 
       {/* Add-section placeholder */}
-      {!isPast && !isFuture && (
+      {!isReadOnly && (
         <Card style={{ padding: 14, marginTop: 12 }}>
-          <div
-            style={{
-              fontSize: 10,
-              letterSpacing: 1,
-              color: "var(--text-3)",
-              fontWeight: 700,
-              textTransform: "uppercase",
-              marginBottom: 8,
-            }}
+          <div style={sectionLabelStyle}>Add a new meal section</div>
+          <button
+            onClick={addSection}
+            style={{ ...addSectionBtnStyle, marginTop: 8 }}
           >
-            Add a new meal section
-          </div>
-          <button onClick={addSection} style={addSectionBtnStyle}>
             + Add section
           </button>
         </Card>
       )}
 
-      {/* Read-only / future banners */}
       {isPast && (
         <Banner
           color="slate"
-          text="Past day — viewing only. Check a past day's meals but edits are locked."
+          text="Past day — viewing only. Edits are locked."
         />
       )}
       {isFuture && (
         <Banner
           color="blue"
-          text="Future day — planning view. Meal details become editable when the day arrives."
+          text="Future day — planning view. Details become editable when the day arrives."
+        />
+      )}
+
+      {/* Toast */}
+      {toast && (
+        <div
+          style={{
+            position: "fixed",
+            top: 12,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "rgba(34,211,238,0.95)",
+            color: "#042f2e",
+            padding: "8px 18px",
+            borderRadius: 18,
+            fontSize: 12,
+            fontWeight: 700,
+            zIndex: 100,
+            boxShadow: "0 4px 20px rgba(34,211,238,0.3)",
+            fontFamily: "var(--font-sans)",
+          }}
+        >
+          {toast}
+        </div>
+      )}
+
+      {/* Add-item overlay */}
+      {addItemOpen && (
+        <AddItemFlow
+          meals={meals}
+          doneIds={doneIds}
+          onAdd={handleAddIngredient}
+          onClose={() => setAddItemOpen(false)}
         />
       )}
     </div>
@@ -242,19 +494,6 @@ export default function Meals({ weekNav }) {
 // Subcomponents
 // ═══════════════════════════════════════════════════════════
 
-function WeekStripShell({ weekNav }) {
-  return (
-    <WeekStrip
-      weekKey={weekNav.weekKey}
-      selectedDayIdx={weekNav.selectedDayIdx}
-      completedDayIdxs={[]}
-      onSelectDay={weekNav.onSelectDay}
-      onShiftWeek={weekNav.onShiftWeek}
-      onJumpToToday={weekNav.onJumpToToday}
-    />
-  );
-}
-
 function SkeletonBlock() {
   return (
     <div
@@ -263,7 +502,6 @@ function SkeletonBlock() {
         borderRadius: 12,
         background:
           "linear-gradient(90deg, rgba(148,163,184,0.05) 0%, rgba(148,163,184,0.1) 50%, rgba(148,163,184,0.05) 100%)",
-        animation: "pulse 1.5s ease-in-out infinite",
       }}
     />
   );
@@ -288,10 +526,7 @@ function ActionButton({ icon, label, onClick }) {
         gap: 10,
         fontFamily: "var(--font-sans)",
         borderRadius: 7,
-        transition: "background .12s",
       }}
-      onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(148,163,184,0.06)")}
-      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
     >
       <span style={{ fontSize: 16 }}>{icon}</span>
       <span>{label}</span>
@@ -320,6 +555,18 @@ function Banner({ color, text }) {
     </div>
   );
 }
+
+// ═══════════════════════════════════════════════════════════
+// Styles
+// ═══════════════════════════════════════════════════════════
+
+const sectionLabelStyle = {
+  fontSize: 10,
+  color: "var(--text-3)",
+  fontWeight: 700,
+  letterSpacing: 1,
+  textTransform: "uppercase",
+};
 
 const copyBtnStyle = {
   display: "flex",
@@ -357,6 +604,24 @@ const dayTypePillActiveStyle = {
   color: "#22d3ee",
 };
 
+const rebalanceBtnStyle = {
+  width: "100%",
+  padding: "10px 14px",
+  background: "rgba(59,130,246,0.15)",
+  border: "1px solid rgba(59,130,246,0.3)",
+  borderRadius: 10,
+  color: "#93c5fd",
+  fontSize: 12,
+  fontWeight: 700,
+  cursor: "pointer",
+  fontFamily: "var(--font-sans)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 8,
+  letterSpacing: 0.3,
+};
+
 const addSectionBtnStyle = {
   width: "100%",
   padding: "8px 12px",
@@ -370,20 +635,26 @@ const addSectionBtnStyle = {
   fontFamily: "var(--font-sans)",
 };
 
+// ═══════════════════════════════════════════════════════════
+// Icons
+// ═══════════════════════════════════════════════════════════
+
 function CopyIcon() {
   return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <rect x="9" y="9" width="13" height="13" rx="2" />
       <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+
+function RefreshIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 12a9 9 0 0 1 15.5-6.3L21 8" />
+      <path d="M21 3v5h-5" />
+      <path d="M21 12a9 9 0 0 1-15.5 6.3L3 16" />
+      <path d="M3 21v-5h5" />
     </svg>
   );
 }

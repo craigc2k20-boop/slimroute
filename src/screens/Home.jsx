@@ -1,14 +1,7 @@
 // ═══════════════════════════════════════════════════════════
 // Home — the dashboard.
-//
-//   WeekStrip (shared, from App)
-//     Day/Week toggle
-//     Macro ring  ← reacts to selected day (or shows week totals)
-//     P/C/F legend
-//     "X kcal left this week"
-//   Hydration card (per selected day)
-//
-// Data is still mocked until the Meals reducer is wired next.
+// Ring reads real meal data from per-day stores written by
+// the Meals screen. Empty/untouched days show an empty ring.
 // ═══════════════════════════════════════════════════════════
 
 import React, { useState, useMemo } from "react";
@@ -19,53 +12,66 @@ import { useLocalState } from "../hooks/useLocalState.js";
 import { DAYS } from "../lib/constants.js";
 import { lds, wkD, getDayMode } from "../lib/date.js";
 import { computeHydrationTarget } from "../lib/hydration.js";
+import { buildIngMap, sa } from "../lib/macros.js";
+import { readDayRecord, getDayType } from "../lib/meal-store.js";
 
-// ─────────────────────────────────────────────────────────
-// MOCK DATA — will be replaced with real reducer data when
-// Meals is wired. Arrays are indexed Mon..Sun (0..6).
-// ─────────────────────────────────────────────────────────
-const MOCK_DAY_TOTALS_BY_IDX = [
-  { cals: 2410, p: 180, c: 275, f: 70 }, // Mon
-  { cals: 2480, p: 172, c: 290, f: 72 }, // Tue
-  { cals: 2510, p: 185, c: 265, f: 68 }, // Wed
-  { cals: 2530, p: 178, c: 300, f: 74 }, // Thu
-  { cals: 2390, p: 165, c: 255, f: 66 }, // Fri
-  { cals: 2416, p: 195, c: 222, f: 73 }, // Sat
-  { cals: 0,    p: 0,   c: 0,   f: 0  }, // Sun (not logged)
-];
-const MOCK_DAY_TARGETS = { cals: 2533, p: 171, c: 304, f: 70 };
-const MOCK_WEEK_TARGETS = {
-  cals: MOCK_DAY_TARGETS.cals * 7,
-  p: MOCK_DAY_TARGETS.p * 7,
-  c: MOCK_DAY_TARGETS.c * 7,
-  f: MOCK_DAY_TARGETS.f * 7,
-};
-// Which days are "completed" — Mon..Fri in the mock
-const MOCK_COMPLETED_DAYS = [0, 1, 2, 3, 4];
+const IM = buildIngMap();
+const BODY_WEIGHT_KG = 83;
+const BASE_CAL_TARGET = 2533;
+
+// Compute totals and targets for a single day from its stored record
+function computeDayView(date) {
+  const key = lds(date);
+  const rec = readDayRecord(key);
+  if (!rec) {
+    return {
+      totals: { cals: 0, p: 0, c: 0, f: 0 },
+      targets: defaultTargetsForWeekday(date),
+      touched: false,
+    };
+  }
+  const totals = sa(rec.meals, IM);
+  const type = getDayType(rec.dayType);
+  const cals = Math.round(BASE_CAL_TARGET * type.calMultiplier);
+  return {
+    totals: { cals: totals.cals, p: totals.p, c: totals.c, f: totals.f },
+    targets: {
+      cals,
+      p: Math.round(cals * 0.27 / 4), // ~27% protein @ 4 kcal/g
+      c: Math.round(cals * 0.48 / 4), // ~48% carbs
+      f: Math.round(cals * 0.25 / 9), // ~25% fat @ 9 kcal/g
+    },
+    touched: true,
+    doneIds: rec.doneIds ?? [],
+    mealCount: rec.meals.length,
+  };
+}
+
+function defaultTargetsForWeekday() {
+  return {
+    cals: BASE_CAL_TARGET,
+    p: Math.round(BASE_CAL_TARGET * 0.27 / 4),
+    c: Math.round(BASE_CAL_TARGET * 0.48 / 4),
+    f: Math.round(BASE_CAL_TARGET * 0.25 / 9),
+  };
+}
 
 export default function Home({ weekNav }) {
   const { weekKey, selectedDayIdx, onSelectDay, onShiftWeek, onJumpToToday } = weekNav;
 
-  // Ring mode — "day" or "week"
   const [ringMode, setRingMode] = useState("day");
 
-  // Derived: 7 Date objects for the visible week
   const weekDates = useMemo(() => wkD(weekKey), [weekKey]);
   const selectedDate = weekDates[selectedDayIdx];
   const selectedKey = lds(selectedDate);
   const dayMode = useMemo(() => getDayMode(selectedDate), [selectedDate]);
 
-  // Hydration entries — keyed per day, persisted + cloud-synced
-  const [entries, setEntries] = useLocalState(
-    `hydration:${selectedKey}`,
-    []
-  );
-
-  // Hydration target — formula-driven
+  // Hydration — already per-day via its own localStorage key
+  const [entries, setEntries] = useLocalState(`hydration:${selectedKey}`, []);
   const hydrationTarget = useMemo(
     () =>
       computeHydrationTarget({
-        bodyWeightKg: 83,
+        bodyWeightKg: BODY_WEIGHT_KG,
         dayType: "rest",
         hasPsyllium: false,
         hasCreatine: false,
@@ -73,43 +79,72 @@ export default function Home({ weekNav }) {
     []
   );
 
-  // Intercept day selection: when user taps a day, flip ring mode to Day
+  // Compute view data for every day (used for week ring + completion dots)
+  const weekData = useMemo(
+    () => weekDates.map((d) => computeDayView(d)),
+    // re-derive whenever the week or selected day changes — any edit on
+    // Meals rewrites localStorage and flips selectedKey, giving us a reason
+    // to recompute. Also recompute if entries change (proxy for activity).
+    // Hack-ish: we compute fresh each render because localStorage isn't
+    // reactive; pulling in selectedKey ensures tab switches re-read.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [weekKey, selectedDayIdx, selectedKey, entries.length]
+  );
+
   const handleSelectDay = (idx) => {
     onSelectDay(idx);
     setRingMode("day");
   };
 
-  // Compute ring totals based on mode
-  const selectedDayTotals = MOCK_DAY_TOTALS_BY_IDX[selectedDayIdx] || { cals: 0, p: 0, c: 0, f: 0 };
-  const weekTotals = MOCK_DAY_TOTALS_BY_IDX.reduce(
+  // Day ring data
+  const dayView = weekData[selectedDayIdx];
+  const dayTotals = dayView.totals;
+  const dayTargets = dayView.targets;
+
+  // Week ring data
+  const weekTotals = weekData.reduce(
     (acc, d) => ({
-      cals: acc.cals + d.cals,
-      p: acc.p + d.p,
-      c: acc.c + d.c,
-      f: acc.f + d.f,
+      cals: acc.cals + d.totals.cals,
+      p: acc.p + d.totals.p,
+      c: acc.c + d.totals.c,
+      f: acc.f + d.totals.f,
+    }),
+    { cals: 0, p: 0, c: 0, f: 0 }
+  );
+  const weekTargets = weekData.reduce(
+    (acc, d) => ({
+      cals: acc.cals + d.targets.cals,
+      p: acc.p + d.targets.p,
+      c: acc.c + d.targets.c,
+      f: acc.f + d.targets.f,
     }),
     { cals: 0, p: 0, c: 0, f: 0 }
   );
 
-  const ringTotals = ringMode === "day" ? selectedDayTotals : weekTotals;
-  const ringTargets = ringMode === "day" ? MOCK_DAY_TARGETS : MOCK_WEEK_TARGETS;
+  // Which days are "complete"? (all meals ticked off)
+  const completedDayIdxs = weekData
+    .map((d, i) =>
+      d.touched && d.mealCount > 0 && d.doneIds.length === d.mealCount ? i : -1
+    )
+    .filter((i) => i !== -1);
+
+  const ringTotals = ringMode === "day" ? dayTotals : weekTotals;
+  const ringTargets = ringMode === "day" ? dayTargets : weekTargets;
   const ringHeader =
     ringMode === "day"
       ? `${DAYS[selectedDayIdx]}'s progress`
       : "This week's progress";
 
-  const weekRemaining = MOCK_WEEK_TARGETS.cals - weekTotals.cals;
-  // Ring is "empty" for future days (no meals yet) or for past/present
-  // days that happened to log nothing.
+  const weekRemaining = weekTargets.cals - weekTotals.cals;
   const isFutureDay = ringMode === "day" && dayMode === "future";
-  const isEmptyDay = ringMode === "day" && (selectedDayTotals.cals === 0 || isFutureDay);
+  const isEmptyDay = ringMode === "day" && (dayTotals.cals === 0 || isFutureDay);
 
   return (
     <div>
       <WeekStrip
         weekKey={weekKey}
         selectedDayIdx={selectedDayIdx}
-        completedDayIdxs={MOCK_COMPLETED_DAYS}
+        completedDayIdxs={completedDayIdxs}
         onSelectDay={handleSelectDay}
         onShiftWeek={onShiftWeek}
         onJumpToToday={onJumpToToday}
@@ -135,7 +170,6 @@ export default function Home({ weekNav }) {
         </div>
       </div>
 
-      {/* Header above the ring */}
       <div
         style={{
           fontSize: 11,
@@ -149,7 +183,6 @@ export default function Home({ weekNav }) {
         {ringHeader}
       </div>
 
-      {/* Ring */}
       <div style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}>
         <MacroRing
           totals={ringTotals}
@@ -160,12 +193,10 @@ export default function Home({ weekNav }) {
         />
       </div>
 
-      {/* Legend — only when there's data to show */}
       {!isEmptyDay && (
         <MacroLegend totals={ringTotals} targets={ringTargets} />
       )}
 
-      {/* Weekly remaining line */}
       <div
         style={{
           textAlign: "center",
@@ -180,7 +211,6 @@ export default function Home({ weekNav }) {
           : `${Math.abs(weekRemaining).toLocaleString()} kcal over this week`}
       </div>
 
-      {/* Hydration card — keyed to selected day; mode drives editability */}
       <HydrationCard
         entries={entries}
         target={hydrationTarget}
