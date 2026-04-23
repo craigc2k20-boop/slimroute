@@ -1,14 +1,20 @@
 // ═══════════════════════════════════════════════════════════
-// AddItemFlow — bottom-sheet overlay for adding an ingredient
-// to one of today's meals.
+// AddItemFlow — bottom-sheet overlay for adding an ingredient.
 //
-// Sheet slides up from the bottom and covers ~75% of the screen.
-// The Meals tab stays visible (dimmed) behind it so the user
-// keeps spatial context.
+// Step 1 shows two groups:
 //
-// Two steps:
-//   1. "Add to which meal?" — lists meals not yet completed
-//   2. Searchable ingredient picker with a "Recent" row at the top
+//   ADD TO EXISTING MEAL
+//     ├─ lists each meal card
+//     └─ picked ingredient gets added to that meal
+//
+//   ADD AS NEW MEAL
+//     ├─ lists unique sections (e.g. Fruit 5:30 PM, Pre-Gym 2 6:00 PM)
+//     └─ picked ingredient becomes a brand-new standalone meal in
+//        that section, auto-named after the ingredient (single-item
+//        meals get their display name from the first ingredient —
+//        see MealCard).
+//
+// Step 2 is the searchable ingredient picker — same as before.
 // ═══════════════════════════════════════════════════════════
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -20,34 +26,55 @@ import { useLocalState } from "../hooks/useLocalState.js";
 const IM = buildIngMap();
 const MAX_RECENTS = 6;
 
-export default function AddItemFlow({ meals, doneIds, onAdd, onClose }) {
-  const [step, setStep] = useState("pickMeal");
-  const [targetMealId, setTargetMealId] = useState(null);
+export default function AddItemFlow({ meals, doneIds, onAdd, onAddNewMeal, onClose }) {
+  const [step, setStep] = useState("pickTarget"); // "pickTarget" | "pickIngredient"
+  const [target, setTarget] = useState(null); // { kind: "meal", mealId } | { kind: "section", section, time }
 
   const [recentIds, setRecentIds] = useLocalState("recentIngIds", []);
 
   const availableMeals = meals.filter((m) => !doneIds.includes(m.id));
 
-  const handlePickMeal = (mealId) => {
-    setTargetMealId(mealId);
+  // Derive unique sections from the meals. A "section" is the part of
+  // the meal name before " — " plus the meal's time. Same section name
+  // at a different time counts as two sections.
+  const sections = useMemo(() => {
+    const seen = new Map();
+    for (const m of meals) {
+      const sec = gS(m.name);
+      const key = `${sec}|${m.time}`;
+      if (!seen.has(key)) seen.set(key, { section: sec, time: m.time });
+    }
+    return [...seen.values()];
+  }, [meals]);
+
+  const handlePickTarget = (t) => {
+    setTarget(t);
     setStep("pickIngredient");
   };
 
   const handlePickIngredient = (ingId) => {
     const nextRecents = [ingId, ...recentIds.filter((id) => id !== ingId)].slice(0, MAX_RECENTS);
     setRecentIds(nextRecents);
-    onAdd(targetMealId, ingId);
+    if (target.kind === "meal") {
+      onAdd(target.mealId, ingId);
+    } else {
+      onAddNewMeal(target.section, target.time, ingId);
+    }
     onClose();
   };
 
   return (
     <Sheet
-      title={step === "pickMeal" ? "Add to which meal?" : "Pick ingredient"}
+      title={step === "pickTarget" ? "Add item" : "Pick ingredient"}
       onClose={onClose}
-      onBack={step === "pickIngredient" ? () => setStep("pickMeal") : null}
+      onBack={step === "pickIngredient" ? () => setStep("pickTarget") : null}
     >
-      {step === "pickMeal" ? (
-        <MealPicker meals={availableMeals} onPick={handlePickMeal} />
+      {step === "pickTarget" ? (
+        <TargetPicker
+          meals={availableMeals}
+          sections={sections}
+          onPick={handlePickTarget}
+        />
       ) : (
         <IngredientPicker recentIds={recentIds} onPick={handlePickIngredient} />
       )}
@@ -56,12 +83,10 @@ export default function AddItemFlow({ meals, doneIds, onAdd, onClose }) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Sheet — bottom-sheet container with dim backdrop.
-// Content column is capped at 640px to match the main app.
+// Sheet — bottom-sheet container with dim backdrop
 // ═══════════════════════════════════════════════════════════
 
 function Sheet({ title, onClose, onBack, children }) {
-  // Lock body scroll while open
   useEffect(() => {
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -70,7 +95,6 @@ function Sheet({ title, onClose, onBack, children }) {
     };
   }, []);
 
-  // Close on Escape
   useEffect(() => {
     const onKey = (e) => e.key === "Escape" && onClose?.();
     window.addEventListener("keydown", onKey);
@@ -90,14 +114,12 @@ function Sheet({ title, onClose, onBack, children }) {
         flexDirection: "column",
         justifyContent: "flex-end",
         alignItems: "center",
-        // Dim backdrop — tap to close
         background: "rgba(3, 7, 18, 0.55)",
         backdropFilter: "blur(4px)",
         WebkitBackdropFilter: "blur(4px)",
       }}
       onClick={onClose}
     >
-      {/* Sheet body — stops clicks bubbling to backdrop */}
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
@@ -116,7 +138,6 @@ function Sheet({ title, onClose, onBack, children }) {
           animation: "slimrouteSheetUp 0.22s ease-out",
         }}
       >
-        {/* Grab handle */}
         <div
           style={{
             width: 36,
@@ -127,7 +148,6 @@ function Sheet({ title, onClose, onBack, children }) {
           }}
         />
 
-        {/* Header */}
         <div
           style={{
             display: "flex",
@@ -139,9 +159,7 @@ function Sheet({ title, onClose, onBack, children }) {
           }}
         >
           {onBack ? (
-            <button onClick={onBack} aria-label="Back" style={iconBtnStyle}>
-              ‹
-            </button>
+            <button onClick={onBack} aria-label="Back" style={iconBtnStyle}>‹</button>
           ) : (
             <div style={{ width: 30 }} />
           )}
@@ -157,12 +175,9 @@ function Sheet({ title, onClose, onBack, children }) {
           >
             {title}
           </h2>
-          <button onClick={onClose} aria-label="Close" style={iconBtnStyle}>
-            ✕
-          </button>
+          <button onClick={onClose} aria-label="Close" style={iconBtnStyle}>✕</button>
         </div>
 
-        {/* Scrollable body */}
         <div
           style={{
             flex: 1,
@@ -175,7 +190,6 @@ function Sheet({ title, onClose, onBack, children }) {
         </div>
       </div>
 
-      {/* Slide-up animation via inline <style> — one-off, small */}
       <style>{`
         @keyframes slimrouteSheetUp {
           from { transform: translateY(100%); opacity: 0.6; }
@@ -187,11 +201,14 @@ function Sheet({ title, onClose, onBack, children }) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Step 1 — Meal picker
+// Step 1 — Target picker: existing meal OR new meal under section
 // ═══════════════════════════════════════════════════════════
 
-function MealPicker({ meals, onPick }) {
-  if (meals.length === 0) {
+function TargetPicker({ meals, sections, onPick }) {
+  const hasMeals = meals.length > 0;
+  const hasSections = sections.length > 0;
+
+  if (!hasMeals && !hasSections) {
     return (
       <div
         style={{
@@ -201,51 +218,113 @@ function MealPicker({ meals, onPick }) {
           fontSize: 13,
         }}
       >
-        All meals complete today. Uncheck one first, or create a new meal.
+        No meal sections yet. Use "Add a new meal section" below to create one first.
       </div>
     );
   }
 
   return (
     <div>
-      {meals.map((m) => {
-        const sectionLabel = gS(m.name);
-        const mealLabel = gL(m.name) ?? m.name;
-        return (
-          <button key={m.id} onClick={() => onPick(m.id)} style={mealRowStyle}>
-            <div style={{ flex: 1, textAlign: "left", minWidth: 0 }}>
-              <div
-                style={{
-                  fontSize: 10,
-                  letterSpacing: 1,
-                  color: "var(--text-3)",
-                  fontWeight: 700,
-                  textTransform: "uppercase",
-                  marginBottom: 2,
-                }}
+      {/* ADD TO EXISTING MEAL */}
+      {hasMeals && (
+        <div style={{ marginBottom: 14 }}>
+          <GroupLabel
+            title="Add to existing meal"
+            subtitle="The ingredient becomes part of a meal you already have."
+          />
+          {meals.map((m) => {
+            const sectionLabel = gS(m.name);
+            const mealLabel = gL(m.name) ?? inferSoloName(m) ?? "Untitled meal";
+            return (
+              <button
+                key={m.id}
+                onClick={() => onPick({ kind: "meal", mealId: m.id })}
+                style={rowStyle}
               >
-                {sectionLabel} · {m.time}
+                <div style={{ flex: 1, textAlign: "left", minWidth: 0 }}>
+                  <div style={rowMetaStyle}>
+                    {sectionLabel} · {m.time}
+                  </div>
+                  <div style={rowTitleStyle}>{mealLabel}</div>
+                </div>
+                <span style={chevronStyle}>›</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ADD AS NEW MEAL */}
+      {hasSections && (
+        <div>
+          <GroupLabel
+            title="Add as new meal"
+            subtitle="The ingredient becomes its own standalone meal under the section you pick."
+          />
+          {sections.map((s) => (
+            <button
+              key={`${s.section}|${s.time}`}
+              onClick={() => onPick({ kind: "section", section: s.section, time: s.time })}
+              style={rowStyle}
+            >
+              <div style={{ flex: 1, textAlign: "left", minWidth: 0 }}>
+                <div style={rowMetaStyle}>
+                  {s.section} · {s.time}
+                </div>
+                <div style={{ ...rowTitleStyle, color: "var(--text-2)", fontStyle: "italic" }}>
+                  New standalone meal
+                </div>
               </div>
-              <div
-                style={{
-                  fontSize: 14,
-                  fontWeight: 700,
-                  color: "var(--text-1)",
-                }}
-              >
-                {mealLabel}
-              </div>
-            </div>
-            <span style={{ color: "var(--text-3)", fontSize: 18 }}>›</span>
-          </button>
-        );
-      })}
+              <span style={chevronStyle}>+</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Fallback display-name helper so meal-picker rows match what the
+// MealCard ultimately shows: solo-ingredient meals show the ingredient name.
+function inferSoloName(meal) {
+  if (meal.items.length !== 1) return null;
+  if (meal.userNamed) return null;
+  const ing = IM[meal.items[0].ingId];
+  return ing?.food ?? null;
+}
+
+function GroupLabel({ title, subtitle }) {
+  return (
+    <div style={{ padding: "4px 4px 8px" }}>
+      <div
+        style={{
+          fontSize: 10,
+          letterSpacing: 1.2,
+          textTransform: "uppercase",
+          color: "#93c5fd",
+          fontWeight: 800,
+        }}
+      >
+        {title}
+      </div>
+      {subtitle && (
+        <div
+          style={{
+            fontSize: 11,
+            color: "var(--text-3)",
+            marginTop: 2,
+            lineHeight: 1.4,
+          }}
+        >
+          {subtitle}
+        </div>
+      )}
     </div>
   );
 }
 
 // ═══════════════════════════════════════════════════════════
-// Step 2 — Ingredient picker (recents + search + list)
+// Step 2 — Ingredient picker (unchanged from last build)
 // ═══════════════════════════════════════════════════════════
 
 function IngredientPicker({ recentIds, onPick }) {
@@ -309,7 +388,7 @@ function IngredientPicker({ recentIds, onPick }) {
 
       {showRecents && (
         <>
-          <SectionLabel>Recent</SectionLabel>
+          <MiniSectionLabel>Recent</MiniSectionLabel>
           <div>
             {recentIngs.map((ing) => (
               <IngredientRow key={`recent-${ing.id}`} ing={ing} onPick={onPick} />
@@ -320,21 +399,14 @@ function IngredientPicker({ recentIds, onPick }) {
       )}
 
       {filtered.length === 0 && (
-        <div
-          style={{
-            padding: "30px 16px",
-            textAlign: "center",
-            color: "var(--text-3)",
-            fontSize: 13,
-          }}
-        >
+        <div style={{ padding: "30px 16px", textAlign: "center", color: "var(--text-3)", fontSize: 13 }}>
           No ingredients match "{query}".
         </div>
       )}
 
       {Object.entries(grouped).map(([cat, ings]) => (
         <div key={cat} style={{ marginBottom: 6 }}>
-          <SectionLabel>{cat}</SectionLabel>
+          <MiniSectionLabel>{cat}</MiniSectionLabel>
           {ings.map((ing) => (
             <IngredientRow key={ing.id} ing={ing} onPick={onPick} />
           ))}
@@ -350,7 +422,7 @@ function IngredientRow({ ing, onPick }) {
   const perLabel = ing.unit === "piece" ? "per piece" : "per 100g";
 
   return (
-    <button onClick={() => onPick(ing.id)} style={ingRowStyle}>
+    <button onClick={() => onPick(ing.id)} style={rowStyle}>
       <div style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
         <div
           style={{
@@ -398,7 +470,7 @@ function IngredientRow({ ing, onPick }) {
   );
 }
 
-function SectionLabel({ children }) {
+function MiniSectionLabel({ children }) {
   return (
     <div
       style={{
@@ -416,7 +488,7 @@ function SectionLabel({ children }) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Styles
+// Shared styles
 // ═══════════════════════════════════════════════════════════
 
 const iconBtnStyle = {
@@ -436,13 +508,13 @@ const iconBtnStyle = {
   fontFamily: "var(--font-sans)",
 };
 
-const mealRowStyle = {
+const rowStyle = {
   width: "100%",
   display: "flex",
   alignItems: "center",
   gap: 10,
-  padding: "12px 14px",
-  marginBottom: 6,
+  padding: "10px 12px",
+  marginBottom: 5,
   background: "rgba(30,41,59,0.4)",
   border: "1px solid rgba(148,163,184,0.1)",
   borderRadius: 10,
@@ -451,25 +523,35 @@ const mealRowStyle = {
   cursor: "pointer",
 };
 
-const ingRowStyle = {
-  width: "100%",
-  display: "flex",
-  alignItems: "center",
-  padding: "9px 12px",
-  marginBottom: 3,
-  background: "rgba(30,41,59,0.35)",
-  border: "1px solid rgba(148,163,184,0.06)",
-  borderRadius: 8,
+const rowMetaStyle = {
+  fontSize: 10,
+  letterSpacing: 1,
+  color: "var(--text-3)",
+  fontWeight: 700,
+  textTransform: "uppercase",
+  marginBottom: 2,
+};
+
+const rowTitleStyle = {
+  fontSize: 14,
+  fontWeight: 700,
   color: "var(--text-1)",
-  fontFamily: "var(--font-sans)",
-  cursor: "pointer",
-  gap: 8,
+};
+
+const chevronStyle = {
+  color: "var(--text-3)",
+  fontSize: 18,
+  flexShrink: 0,
 };
 
 // ═══════════════════════════════════════════════════════════
-// Helper exposed for Meals.jsx
+// Helpers used by Meals.jsx
 // ═══════════════════════════════════════════════════════════
 
+/**
+ * Add an ingredient to an existing meal. Merges amounts if the
+ * ingredient is already present, otherwise appends a new row.
+ */
 export function addIngredientToMeal(meals, mealId, ingId) {
   const ing = IM[ingId];
   if (!ing) return meals;
@@ -491,4 +573,40 @@ export function addIngredientToMeal(meals, mealId, ingId) {
       ),
     };
   });
+}
+
+/**
+ * Create a new standalone meal in a section.
+ * The meal has exactly one ingredient (at defAmt), no user-set name,
+ * so MealCard's single-ingredient auto-naming will show the ingredient's
+ * food name as the card title.
+ *
+ * New meals are inserted right after the last existing meal in the same
+ * section, keeping section grouping visually intact.
+ */
+export function addNewMealToSection(meals, section, time, ingId) {
+  const ing = IM[ingId];
+  if (!ing) return meals;
+  const defAmt = ing.defAmt ?? (ing.unit === "piece" ? 1 : 100);
+
+  const newMeal = {
+    id: `meal-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    name: section, // bare section name — meal has no custom name; autoNaming kicks in
+    time,
+    fixed: false,
+    userNamed: false,
+    items: [{ ingId, amt: defAmt }],
+  };
+
+  // Find the last meal in the same section to splice after.
+  let insertAt = meals.length;
+  for (let i = meals.length - 1; i >= 0; i--) {
+    const s = gS(meals[i].name);
+    if (s === section && meals[i].time === time) {
+      insertAt = i + 1;
+      break;
+    }
+  }
+
+  return [...meals.slice(0, insertAt), newMeal, ...meals.slice(insertAt)];
 }

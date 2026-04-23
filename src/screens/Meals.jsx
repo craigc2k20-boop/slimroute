@@ -8,7 +8,7 @@ import React, { useMemo, useEffect, useState } from "react";
 import WeekStrip from "../components/WeekStrip.jsx";
 import MealCard from "../components/MealCard.jsx";
 import Card from "../components/Card.jsx";
-import AddItemFlow, { addIngredientToMeal } from "../components/AddItemFlow.jsx";
+import AddItemFlow, { addIngredientToMeal, addNewMealToSection } from "../components/AddItemFlow.jsx";
 import { useLocalState } from "../hooks/useLocalState.js";
 import { DAYS } from "../lib/constants.js";
 import { wkD, lds, getDayMode } from "../lib/date.js";
@@ -219,6 +219,14 @@ export default function Meals({ weekNav }) {
       meals: addIngredientToMeal(meals, mealId, ingId),
     });
     setToast(`Added to meal`);
+  };
+
+  const handleAddNewMeal = (section, time, ingId) => {
+    setDayRecord({
+      ...dayRecord,
+      meals: addNewMealToSection(meals, section, time, ingId),
+    });
+    setToast(`New meal added to ${section}`);
   };
 
   const scanItem = () =>
@@ -483,6 +491,7 @@ export default function Meals({ weekNav }) {
           meals={meals}
           doneIds={doneIds}
           onAdd={handleAddIngredient}
+          onAddNewMeal={handleAddNewMeal}
           onClose={() => setAddItemOpen(false)}
         />
       )}
